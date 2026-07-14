@@ -1,0 +1,105 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: airport-ops-postgres
+    environment:
+      POSTGRES_USER: airport_user
+      POSTGRES_PASSWORD: airport_password
+      POSTGRES_DB: airport_ops
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airport_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mongodb:
+    image: mongo:6.0
+    container_name: airport-ops-mongo
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: airport_user
+      MONGO_INITDB_ROOT_PASSWORD: airport_password
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: airport-ops-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    container_name: airport-ops-api
+    environment:
+      - DATABASE_URL=postgresql://airport_user:airport_password@postgres:5432/airport_ops
+      - MONGO_URL=mongodb://airport_user:airport_password@mongodb:27017/airport_ops
+      - REDIS_URL=redis://redis:6379/0
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src
+      - ./logs:/app/logs
+      - ./models:/app/models
+    command: uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dashboard
+    container_name: airport-ops-dashboard
+    environment:
+      - DATABASE_URL=postgresql://airport_user:airport_password@postgres:5432/airport_ops
+      - MONGO_URL=mongodb://airport_user:airport_password@mongodb:27017/airport_ops
+      - REDIS_URL=redis://redis:6379/0
+    ports:
+      - "8501:8501"
+    depends_on:
+      - postgres
+      - mongodb
+      - redis
+      - api
+    volumes:
+      - ./src:/app/src
+      - ./logs:/app/logs
+      - ./models:/app/models
+    command: streamlit run src/dashboard/app.py --server.port=8501 --server.address=0.0.0.0
+
+volumes:
+  postgres_data:
+  mongodb_data:
+  redis_data:
+
+networks:
+  default:
+    name: airport-ops-network
